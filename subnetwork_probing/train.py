@@ -14,12 +14,12 @@ import gc
 import networkx as nx
 import numpy as np
 from acdc.docstring.utils import AllDataThings, get_all_docstring_things
-from acdc.logic_gates.utils import get_all_logic_gate_things
+# from acdc.logic_gates.utils import get_all_logic_gate_things
 import pandas as pd
 import torch
 import torch.nn.functional as F
 import subnetwork_probing.transformer_lens.transformer_lens.utils as utils
-from acdc.tracr_task.utils import get_all_tracr_things
+# from acdc.tracr_task.utils import get_all_tracr_things
 from acdc.acdc_utils import reset_network
 from acdc.TLACDCEdge import (
     TorchIndex,
@@ -80,8 +80,8 @@ def iterative_correspondence_from_mask(
 
     assert all([v <= 3 for v in head_parents.values()]), "We should have at most three parents (Q, K and V, connected via placeholders)"
 
-        if node.name.endswith(("mlp_in", "resid_mid")):
-            additional_nodes_to_mask.append(TLACDCInterpNode(node.name.replace("resid_mid", "mlp_out").replace("mlp_in", "mlp_out"), node.index, EdgeType.DIRECT_COMPUTATION))
+    # if node.name.endswith(("mlp_in", "resid_mid")):
+    #     additional_nodes_to_mask.append(TLACDCInterpNode(node.name.replace("resid_mid", "mlp_out").replace("mlp_in", "mlp_out"), node.index, EdgeType.DIRECT_COMPUTATION))
 
     for node in nodes_to_mask + additional_nodes_to_mask:
         # Mark edges where this is child as not present
@@ -512,17 +512,17 @@ if __name__ == "__main__":
             device=torch.device(args.device),
             metric=args.loss_type,
         )
-    elif args.task == "tracr-reverse":
-        all_task_things = get_all_tracr_things(
-            task="reverse", metric_name=args.loss_type, num_examples=args.num_examples, device=torch.device(args.device)
-        )
-    elif args.task == "tracr-proportion":
-        all_task_things = get_all_tracr_things(
-            task="proportion",
-            metric_name=args.loss_type,
-            num_examples=args.num_examples,
-            device=torch.device(args.device),
-        )
+    # elif args.task == "tracr-reverse":
+    #     all_task_things = get_all_tracr_things(
+    #         task="reverse", metric_name=args.loss_type, num_examples=args.num_examples, device=torch.device(args.device)
+    #     )
+    # elif args.task == "tracr-proportion":
+    #     all_task_things = get_all_tracr_things(
+    #         task="proportion",
+    #         metric_name=args.loss_type,
+    #         num_examples=args.num_examples,
+    #         device=torch.device(args.device),
+    #     )
     elif args.task == "docstring":
         all_task_things = get_all_docstring_things(
             num_examples=args.num_examples,
@@ -537,16 +537,16 @@ if __name__ == "__main__":
             metric_name=args.loss_type,
             device=args.device,
         )
-    elif args.task == "or_gate":
-        num_examples = 1
-        seq_len = 1
+    # elif args.task == "or_gate":
+    #     num_examples = 1
+    #     seq_len = 1
 
-        all_task_things = get_all_logic_gate_things(
-            mode="OR",
-            num_examples=num_examples,
-            seq_len=seq_len,
-            device=args.device,
-        )
+    #     all_task_things = get_all_logic_gate_things(
+    #         mode="OR",
+    #         num_examples=num_examples,
+    #         seq_len=seq_len,
+    #         device=args.device,
+    #     )
     else:
         raise ValueError(f"Unknown task {args.task}")
 

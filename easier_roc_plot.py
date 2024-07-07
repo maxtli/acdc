@@ -137,3 +137,5 @@ for i, alg in enumerate(["ACDC", "SP"]):
 fig.update_xaxes(showline=False, zeroline=False, showgrid=False, row=1, col=2, showticklabels=False, ticks="")
 fig.update_yaxes(showline=False, zeroline=False, showgrid=False, row=1, col=2, side="right")
 fig.show()
+
+# %%

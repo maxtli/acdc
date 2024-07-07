@@ -77,6 +77,7 @@ from tqdm import tqdm
 import yaml
 import pandas
 from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
+from fancy_einsum import einsum
 
 import matplotlib.pyplot as plt
 import plotly.express as px
@@ -88,26 +89,28 @@ from transformer_lens.hook_points import HookedRootModule, HookPoint
 from transformer_lens.HookedTransformer import (
     HookedTransformer,
 )
-try:
-    from acdc.tracr_task.utils import (
-        get_all_tracr_things,
-        get_tracr_model_input_and_tl_model,
-    )
-except Exception as e:
-    print(f"Could not import `tracr` because {e}; the rest of the file should work but you cannot use the tracr tasks")
-from acdc.docstring.utils import get_all_docstring_things
-from acdc.logic_gates.utils import get_all_logic_gate_things
-from acdc.acdc_utils import (
-    make_nd_dict,
-    reset_network,
-    shuffle_tensor,
-    cleanup,
-    ct,
-    TorchIndex,
-    Edge,
-    EdgeType,
-)  # these introduce several important classes !!!
+# try:
+#     from acdc.tracr_task.utils import (
+#         get_all_tracr_things,
+#         get_tracr_model_input_and_tl_model,
+#     )
+# except Exception as e:
+#     print(f"Could not import `tracr` because {e}; the rest of the file should work but you cannot use the tracr tasks")
+# from acdc.docstring.utils import get_all_docstring_things
+# from acdc.logic_gates.utils import get_all_logic_gate_things
+# from acdc.acdc_utils import (
+#     make_nd_dict,
+#     reset_network,
+#     shuffle_tensor,
+#     cleanup,
+#     ct,
+#     TorchIndex,
+#     Edge,
+#     EdgeType,
+# )  # these introduce several important classes !!!
 
+import time
+import pickle
 from acdc.TLACDCCorrespondence import TLACDCCorrespondence
 from acdc.TLACDCInterpNode import TLACDCInterpNode
 from acdc.TLACDCExperiment import TLACDCExperiment
@@ -119,12 +122,12 @@ from acdc.ioi.utils import (
     get_all_ioi_things,
     get_gpt2_small,
 )
-from acdc.induction.utils import (
-    get_all_induction_things,
-    get_validation_data,
-    get_good_induction_candidates,
-    get_mask_repeat_candidates,
-)
+# from acdc.induction.utils import (
+#     get_all_induction_things,
+#     get_validation_data,
+#     get_good_induction_candidates,
+#     get_mask_repeat_candidates,
+# )
 from acdc.greaterthan.utils import get_all_greaterthan_things
 
 from acdc.acdc_graphics import (
@@ -142,15 +145,19 @@ torch.autograd.set_grad_enabled(False)
 # We'll reproduce </p>
 
 #%%
+def ct():
+    return time.ctime().replace(" ", "_").replace(":", "_").replace("__", "_")
+
 parser = argparse.ArgumentParser(description="Used to launch ACDC runs. Only task and threshold are required")
 
 
-task_choices = ['ioi', 'docstring', 'induction', 'tracr-reverse', 'tracr-proportion', 'greaterthan', 'or_gate']
+task_choices = ['ioi', 'docstring', 'induction', 'greaterthan']
 parser.add_argument('--task', type=str, required=True, choices=task_choices, help=f'Choose a task from the available options: {task_choices}')
 parser.add_argument('--threshold', type=float, required=True, help='Value for THRESHOLD')
 parser.add_argument('--first-cache-cpu', type=str, required=False, default="True", help='Value for FIRST_CACHE_CPU (the old name for the `online_cache`)')
 parser.add_argument('--second-cache-cpu', type=str, required=False, default="True", help='Value for SECOND_CACHE_CPU (the old name for the `corrupted_cache`)')
 parser.add_argument('--zero-ablation', action='store_true', help='Use zero ablation')
+parser.add_argument('--resample-ablation', action='store_true', help='Use resample ablation')
 parser.add_argument('--using-wandb', action='store_true', help='Use wandb')
 parser.add_argument('--wandb-entity-name', type=str, required=False, default="remix_school-of-rock", help='Value for WANDB_ENTITY_NAME')
 parser.add_argument('--wandb-group-name', type=str, required=False, default="default", help='Value for WANDB_GROUP_NAME')
@@ -173,12 +180,19 @@ if ipython is not None:
     # We are in a notebook
     # you can put the command you would like to run as the ... in r"""..."""
     args = parser.parse_args(
-        [line.strip() for line in r"""--task=induction\
---zero-ablation\
---threshold=0.71\
+#         [line.strip() for line in r"""--task=induction\
+# --zero-ablation\
+# --threshold=0.71\
+# --indices-mode=reverse\
+# --first-cache-cpu=False\
+# --second-cache-cpu=False\
+# --max-num-epochs=100000""".split("\\\n")]
+        [line.strip() for line in r"""--task=ioi\
+--threshold=0.0575\
 --indices-mode=reverse\
 --first-cache-cpu=False\
 --second-cache-cpu=False\
+--zero-ablation\
 --max-num-epochs=100000""".split("\\\n")]
     )
 else:
@@ -220,6 +234,7 @@ NAMES_MODE = args.names_mode
 DEVICE = args.device
 RESET_NETWORK = args.reset_network
 SINGLE_STEP = True if args.single_step else False
+RESAMPLE_ABLATION = True if args.resample_ablation else False
 
 #%% [markdown] 
 # <h2>Setup Task</h2>
@@ -234,48 +249,48 @@ if TASK == "ioi":
     things = get_all_ioi_things(
         num_examples=num_examples, device=DEVICE, metric_name=args.metric
     )
-elif TASK == "or_gate":
-    num_examples = 1
-    seq_len = 1
+# elif TASK == "or_gate":
+#     num_examples = 1
+#     seq_len = 1
 
-    things = get_all_logic_gate_things(
-        mode="OR",
-        num_examples=num_examples,
-        seq_len=seq_len,
-        device=DEVICE,
-    )
-elif TASK == "tracr-reverse":
-    num_examples = 6
-    things = get_all_tracr_things(
-        task="reverse",
-        metric_name=args.metric,
-        num_examples=num_examples,
-        device=DEVICE,
-    )
-elif TASK == "tracr-proportion":
-    num_examples = 50
-    things = get_all_tracr_things(
-        task="proportion",
-        metric_name=args.metric,
-        num_examples=num_examples,
-        device=DEVICE,
-    )
-elif TASK == "induction":
-    num_examples = 10 if IN_COLAB else 50
-    seq_len = 300
-    things = get_all_induction_things(
-        num_examples=num_examples, seq_len=seq_len, device=DEVICE, metric=args.metric
-    )
-elif TASK == "docstring":
-    num_examples = 50
-    seq_len = 41
-    things = get_all_docstring_things(
-        num_examples=num_examples,
-        seq_len=seq_len,
-        device=DEVICE,
-        metric_name=args.metric,
-        correct_incorrect_wandb=True,
-    )
+#     things = get_all_logic_gate_things(
+#         mode="OR",
+#         num_examples=num_examples,
+#         seq_len=seq_len,
+#         device=DEVICE,
+#     )
+# elif TASK == "tracr-reverse":
+#     num_examples = 6
+#     things = get_all_tracr_things(
+#         task="reverse",
+#         metric_name=args.metric,
+#         num_examples=num_examples,
+#         device=DEVICE,
+#     )
+# elif TASK == "tracr-proportion":
+#     num_examples = 50
+#     things = get_all_tracr_things(
+#         task="proportion",
+#         metric_name=args.metric,
+#         num_examples=num_examples,
+#         device=DEVICE,
+#     )
+# elif TASK == "induction":
+#     num_examples = 10 if IN_COLAB else 50
+#     seq_len = 300
+#     things = get_all_induction_things(
+#         num_examples=num_examples, seq_len=seq_len, device=DEVICE, metric=args.metric
+#     )
+# elif TASK == "docstring":
+#     num_examples = 50
+#     seq_len = 41
+#     things = get_all_docstring_things(
+#         num_examples=num_examples,
+#         seq_len=seq_len,
+#         device=DEVICE,
+#         metric_name=args.metric,
+#         correct_incorrect_wandb=True,
+#     )
 elif TASK == "greaterthan":
     num_examples = 100
     things = get_all_greaterthan_things(
@@ -289,14 +304,93 @@ else:
 # <p> Let's define the four most important objects for ACDC experiments:
 
 #%%
-
+tl_model = things.tl_model # transformerlens model
 validation_metric = things.validation_metric # metric we use (e.g KL divergence)
 toks_int_values = things.validation_data # clean data x_i
-toks_int_values_other = things.validation_patch_data # corrupted data x_i'
-tl_model = things.tl_model # transformerlens model
 
-if RESET_NETWORK:
-    reset_network(TASK, DEVICE, tl_model)
+if RESAMPLE_ABLATION:
+    permutation = torch.randperm(toks_int_values.shape[0])
+
+    # make sure all prompts are resampled
+    while (permutation == torch.arange(toks_int_values.shape[0])).sum() > 0:
+        permutation = torch.randperm(toks_int_values.shape[0])
+    permutation = permutation.to(DEVICE)
+
+    toks_int_values_other = toks_int_values[permutation]
+
+    # last_token_pos = ((toks_int_values != tl_model.tokenizer.pad_token_id) 
+    #                   * torch.arange(toks_int_values.shape[1]).to(DEVICE)).argmax(dim=-1)
+
+    # # if resampled sequence i shorter than original sequence, move padding to left
+    # padding_left = last_token_pos - last_token_pos[permutation]
+    # for i in range(toks_int_values.shape[0]):
+    #     if padding_left[i] > 0:
+    #         toks_int_values_other[i] = torch.cat((
+    #             toks_int_values_other[i,-padding_left[i]:], 
+    #             toks_int_values_other[i, :-padding_left[i]]
+    #         ), dim=-1)
+else:
+    toks_int_values_other = things.validation_patch_data # corrupted data x_i'
+
+# if RESET_NETWORK:
+    # reset_network(TASK, DEVICE, tl_model)
+
+# %%
+
+OA_TASK = "gt" if TASK == "greaterthan" else TASK
+with open(f"../inverseprobes/results/oca/{OA_TASK}/means_attention.pkl", "rb") as f:
+    #  n_layers x 10 (seq_len) x n_heads x d_head
+    init_modes_attention = pickle.load(f)
+with open(f"../inverseprobes/results/oca/{OA_TASK}/means_mlp.pkl", "rb") as f:
+    # n_layers x 10 (seq_len) x d_model
+    init_modes_mlp = pickle.load(f)
+with open(f"../inverseprobes/results/oca/{OA_TASK}/means_samples.pkl", "rb") as f:
+    # n_layers x 10 (seq_len) x d_model
+    samples = pickle.load(f)
+
+# %%
+def process_means(all_means, samples, cutoff=None):
+    if cutoff:
+        min_length = cutoff
+    else:
+        min_length = (torch.arange(samples.shape[0]).to(DEVICE) * (samples == samples.max())).argmax().item()
+
+    processed_means = []
+    for means in all_means:
+        # [seq_pos, layer, ...]
+        s = samples[(..., *[None for _ in means.shape[1:]])]
+        
+        general_mean = (means[min_length:] * s[min_length:]).sum(dim=0) / s[min_length:].sum()
+        processed_means.append(
+            torch.cat((means[:min_length],general_mean[None, :]), dim=0)
+            if cutoff is None else general_mean
+        )
+    return processed_means
+
+null_attn, null_mlp = process_means([init_modes_attention, init_modes_mlp], samples)
+
+# %%
+
+# n_layers x n_heads x d_head x d_model
+all_w = torch.stack([block.attn.W_O for block in tl_model.blocks], dim=0)
+null_attn = einsum(
+    "s n_layers n_heads d_head, n_layers n_heads d_head d_model -> s n_layers n_heads d_model", 
+    null_attn, all_w
+)
+
+# %%
+
+assert null_mlp.shape[0] == null_attn.shape[0]
+diff = toks_int_values.shape[1] - null_mlp.shape[0]
+if diff <= 0:
+    null_attn = null_attn[:toks_int_values.shape[1]]
+    null_mlp = null_mlp[:toks_int_values.shape[1]]
+else:
+    null_attn = torch.cat([null_attn, null_attn[[-1]].expand(diff,-1,-1,-1)], dim=0)
+    null_mlp = torch.cat([null_mlp, null_mlp[[-1]].expand(diff,-1,-1)], dim=0)
+
+null_attn = null_attn.transpose(0,1)
+null_mlp = null_mlp.transpose(0,1)
 
 #%% [markdown]
 # <h2>Setup ACDC Experiment</h2>
@@ -351,6 +445,8 @@ exp = TLACDCExperiment(
     add_receiver_hooks=False,
     remove_redundant=False,
     show_full_index=use_pos_embed,
+    means_attention=null_attn,
+    means_mlp=null_mlp,
 )
 
 # %% [markdown]
@@ -365,15 +461,15 @@ exp_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 for i in range(args.max_num_epochs):
     exp.step(testing=False)
 
-    show(
-        exp.corr,
-        f"ims/img_new_{i+1}.png",
-        show_full_index=False,
-    )
+    # show(
+    #     exp.corr,
+    #     f"ims/img_new_{i+1}.png",
+    #     show_full_index=False,
+    # )
 
-    if IN_COLAB or ipython is not None:
-        # so long as we're not running this as a script, show the image!
-        display(Image(f"ims/img_new_{i+1}.png"))
+    # if IN_COLAB or ipython is not None:
+    #     # so long as we're not running this as a script, show the image!
+    #     display(Image(f"ims/img_new_{i+1}.png"))
 
     print(i, "-" * 50)
     print(exp.count_no_edges())
@@ -382,14 +478,25 @@ for i in range(args.max_num_epochs):
         exp.save_edges("edges.pkl")
 
     if exp.current_node is None or SINGLE_STEP:
-        show(
-            exp.corr,
-            f"ims/ACDC_img_{exp_time}.png",
+        # show(
+        #     exp.corr,
+        #     f"ims/ACDC_img_{exp_time}.png",
 
-        )
+        # )
         break
 
-exp.save_edges("another_final_edges.pkl")
+out_folder = ""
+if ZERO_ABLATION:
+    out_folder = f"results/raw/{TASK}/mean"
+elif RESAMPLE_ABLATION:
+    out_folder = f"results/raw/{TASK}/resample"
+else:
+    out_folder = f"results/raw/{TASK}/cf"
+
+if not os.path.exists(out_folder):
+    os.makedirs(out_folder)
+
+exp.save_edges(f"{out_folder}/raw_edges_{THRESHOLD}.pkl")
 
 if USING_WANDB:
     edges_fname = f"edges.pth"
@@ -410,4 +517,3 @@ if USING_WANDB:
 exp.save_subgraph(
     return_it=True,
 )
-# %%

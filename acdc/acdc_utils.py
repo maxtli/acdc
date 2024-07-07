@@ -38,11 +38,17 @@ def kl_divergence(
     last_seq_element_only: bool = True,
     base_model_probs_last_seq_element_only: bool = False,
     return_one_element: bool = True,
+    last_token_pos: Optional[torch.Tensor] = None
 ) -> torch.Tensor:
     # Note: we want base_model_probs_last_seq_element_only to remain False by default, because when the Docstring
     # circuit uses this, it already takes the last position before passing it in.
 
-    if last_seq_element_only:
+    if last_token_pos is not None:
+        logits = logits[
+            torch.arange(logits.shape[0]).to(logits.device),
+            last_token_pos
+        ]
+    elif last_seq_element_only:
         logits = logits[:, -1, :]
 
     if base_model_probs_last_seq_element_only:

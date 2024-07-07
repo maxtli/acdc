@@ -82,7 +82,9 @@ class TLACDCExperiment:
         names_mode: Literal["normal", "reverse", "shuffle"] = "normal",
         wandb_config: Optional[Namespace] = None,
         early_exit: bool = False,
-        positions: Optional[List[int]] = None, # if None, do not split by position. TODO change the syntax here...
+        positions: Optional[List[int]] = None, # if None, do not split by position. TODO change the syntax here...,
+        means_attention = None,
+        means_mlp = None
     ):
         """Initialize the ACDC experiment"""
 
@@ -112,6 +114,9 @@ class TLACDCExperiment:
         self.step_idx = 0
         self.hook_verbose = hook_verbose
         self.skip_edges = skip_edges
+
+        self.means_attention = means_attention
+        self.means_mlp = means_mlp
 
         if skip_edges != "no":
             warnings.warn("Never skipping edges, for now")
@@ -428,11 +433,24 @@ class TLACDCExperiment:
             else:
                 hook_name_substrings.append("blocks.0.hook_resid_pre")
 
+            def mean_ablation_hook(act, hook):
+                if hook.name == "blocks.0.hook_resid_pre":
+                    a = self.means_mlp[0]
+                else:
+                    hook_name = hook.name.split(".")
+                    block_no = int(hook_name[1])
+                    if hook_name[-1] == "hook_result":
+                        a = self.means_attention[block_no]
+                    else:
+                        a = self.means_mlp[block_no+1]
+                return a[None,:].expand(act.shape)
+                
             # add hooks to zero out all these hook points
             hook_name_bool_function = lambda hook_name: any([hook_name_substring in hook_name for hook_name_substring in hook_name_substrings])
             self.model.add_hook(
                 name = hook_name_bool_function,
-                hook = lambda z, hook: torch.zeros_like(z),
+                # hook = lambda z, hook: torch.zeros_like(z),
+                hook = mean_ablation_hook,
             )
             # we now add the saving hooks AFTER we've zeroed out activations
 
@@ -655,11 +673,11 @@ class TLACDCExperiment:
 
         if is_this_node_used and self.current_node.incoming_edge_type.value != EdgeType.PLACEHOLDER.value:
             fname = f"ims/img_new_{self.step_idx}.png"
-            show(
-                self.corr,
-                fname=fname,
-                show_full_index=self.show_full_index,
-            )
+            # show(
+            #     self.corr,
+            #     fname=fname,
+            #     show_full_index=self.show_full_index,
+            # )
             if self.using_wandb:
                 try:
                     wandb.log(

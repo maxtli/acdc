@@ -40,25 +40,51 @@ def get_all_ioi_things(num_examples, device, metric_name, kl_return_one_element=
     ioi_dataset = IOIDataset(
         prompt_type="ABBA",
         N=num_examples*2,
-        nb_templates=1,
+        nb_templates=None,
         seed = 0,
     )
 
     abc_dataset = (
-        ioi_dataset.gen_flipped_prompts(("IO", "RAND"), seed=1)
-        .gen_flipped_prompts(("S", "RAND"), seed=2)
+        ioi_dataset
+        # .gen_flipped_prompts(("IO", "RAND"), seed=1)
+        # .gen_flipped_prompts(("S", "RAND"), seed=2)
         .gen_flipped_prompts(("S1", "RAND"), seed=3)
     )
 
-    seq_len = ioi_dataset.toks.shape[1]
-    assert seq_len == 16, f"Well, I thought ABBA #1 was 16 not {seq_len} tokens long..."
+    # seq_len = ioi_dataset.toks.shape[1]
+    # assert seq_len == 16, f"Well, I thought ABBA #1 was 16 not {seq_len} tokens long..."
 
-    default_data = ioi_dataset.toks.long()[:num_examples*2, : seq_len - 1].to(device)
-    patch_data = abc_dataset.toks.long()[:num_examples*2, : seq_len - 1].to(device)
-    labels = ioi_dataset.toks.long()[:num_examples*2, seq_len-1]
+    # default_data = ioi_dataset.toks.long()[:num_examples*2, : seq_len - 1].to(device)
+    # patch_data = abc_dataset.toks.long()[:num_examples*2, : seq_len - 1].to(device)
+    # labels = ioi_dataset.toks.long()[:num_examples*2, seq_len-1]
+
+    default_data = ioi_dataset.toks.long()[:num_examples*2, :]
+    patch_data = abc_dataset.toks.long()[:num_examples*2, :]
+    default_data = torch.cat([
+        torch.tensor([tl_model.tokenizer.bos_token_id]).repeat(default_data.shape[0],1),
+        default_data
+    ], dim=1)
+    patch_data = torch.cat([
+        torch.tensor([tl_model.tokenizer.bos_token_id]).repeat(patch_data.shape[0],1),
+        patch_data
+    ], dim=1)
+
+    # last token position in the prompt (NOT the label position)
+    last_token_pos = ((default_data != tl_model.tokenizer.pad_token_id) * torch.arange(default_data.shape[1])).argmax(dim=-1) - 1
+
+    # before inserting pad token, therefore don't add 1
+    labels = ioi_dataset.toks.long()[
+        torch.arange(num_examples * 2), 
+        last_token_pos
+    ]
+
     wrong_labels = torch.as_tensor(ioi_dataset.s_tokenIDs[:num_examples*2], dtype=torch.long, device=device)
 
     assert torch.equal(labels, torch.as_tensor(ioi_dataset.io_tokenIDs, dtype=torch.long))
+
+    default_data = default_data.to(device)
+    patch_data = patch_data.to(device)
+    last_token_pos = last_token_pos.to(device)
     labels = labels.to(device)
 
     validation_data = default_data[:num_examples, :]
@@ -71,14 +97,17 @@ def get_all_ioi_things(num_examples, device, metric_name, kl_return_one_element=
     test_labels = labels[num_examples:]
     test_wrong_labels = wrong_labels[num_examples:]
 
-
     with torch.no_grad():
-        base_model_logits = tl_model(default_data)[:, -1, :]
+        base_model_logits = tl_model(default_data)
+        # base_model_logits = base_model_logits[:, -1, :]
+        base_model_logits = base_model_logits[
+            torch.arange(base_model_logits.shape[0]).to(device),
+            last_token_pos
+        ]
         base_model_logprobs = F.log_softmax(base_model_logits, dim=-1)
 
     base_validation_logprobs = base_model_logprobs[:num_examples, :]
     base_test_logprobs = base_model_logprobs[num_examples:, :]
-
 
     if metric_name == "kl_div":
         validation_metric = partial(
@@ -87,6 +116,7 @@ def get_all_ioi_things(num_examples, device, metric_name, kl_return_one_element=
             last_seq_element_only=True,
             base_model_probs_last_seq_element_only=False,
             return_one_element=kl_return_one_element,
+            last_token_pos=last_token_pos
         )
     elif metric_name == "logit_diff":
         validation_metric = partial(

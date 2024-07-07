@@ -60,3 +60,6 @@ pts/
 **/.DS_Store
 
 ob-jupyter
+
+old_results/*
+prog_files/*
